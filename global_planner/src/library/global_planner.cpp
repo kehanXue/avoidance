@@ -172,13 +172,21 @@ bool GlobalPlanner::isLegal(const Node& node) {
 }
 
 double GlobalPlanner::getRisk(const Cell& cell) {
+    ROS_ERROR("Get here 1");
   if (risk_cache_.find(cell) != risk_cache_.end()) {
     return risk_cache_[cell];
   }
 
+    ROS_ERROR("Get here 2");
   double risk = getSingleCellRisk(cell);
+
+  ROS_ERROR("robot_radius_ : %lf", robot_radius_ );
+  ROS_ERROR("octree_resolution: %lf", octree_resolution_);
+  // octree_resolution_ = 1.0;
   int radius = static_cast<int>(std::ceil(robot_radius_ / octree_resolution_));
+    ROS_ERROR("Get here 3");
   for (const Cell& neighbor : cell.getFlowNeighbors(radius)) {
+    ROS_ERROR("Get here 4");
     risk += neighbor_risk_flow_ * getSingleCellRisk(neighbor);
   }
 
@@ -477,6 +485,10 @@ bool GlobalPlanner::getGlobalPath() {
   Cell t = Cell(goal_pos_);
   current_cell_blocked_ = isOccupied(s);
 
+  // ROS_ERROR("Get here 2");
+  // ROS_ERROR("1.%d", (goal_must_be_free_ && getRisk(t) > max_cell_risk_));
+  ROS_ERROR("2.%d", current_cell_blocked_);
+  ROS_ERROR("Get here 3");
   if (goal_must_be_free_ && getRisk(t) > max_cell_risk_) {
     // If goal is occupied, no path is published
     ROS_INFO("Goal position is occupied");
@@ -489,6 +501,7 @@ bool GlobalPlanner::getGlobalPath() {
     // return true;
     return false;
   } else {
+    ROS_ERROR("Get here");
     // Both current position and goal are free, try to find a path
     std::vector<Cell> path;
     if (!findPath(path)) {
@@ -497,6 +510,8 @@ bool GlobalPlanner::getGlobalPath() {
       goal_is_blocked_ = true;
       return false;
     }
+
+    ROS_ERROR("Else");
     setPath(path);
     return true;
   }

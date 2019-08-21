@@ -337,7 +337,7 @@ void LocalPlannerNode::clickedGoalCallback(const geometry_msgs::PoseStamped& msg
   goal_msg_ = msg;
   /* Selecting the goal from Rviz sets x and y. Get the z coordinate set in
    * the launch file */
-  goal_msg_.pose.position.z = local_planner_->getGoal().z();
+  // goal_msg_.pose.position.z = local_planner_->getGoal().z();
 }
 
 void LocalPlannerNode::updateGoalCallback(const visualization_msgs::MarkerArray& msg) {

@@ -1,0 +1,32 @@
+<!-- SITL launch file which uses an authentic gazebo model of the Realsense camera-->
+<!-- To be able to run this complete the following steps:-->
+<!-- Clone this package into catkin_ws and build:-->
+<!-- git clone git@github.com:SyrianSpock/realsense_gazebo_plugin.git-->
+<!-- catkin build realsense_gazebo_plugin (for ROS kinetic, the kinetic-devel branch must be used)-->
+<!-- Add to Gazebo model path:-->
+<!-- export GAZEBO_MODEL_PATH=${GAZEBO_MODEL_PATH}:my_path/catkin_ws/src/realsense_gazebo_plugin/models-->
+
+
+<launch>
+    <!-- arg name="pointcloud_topics" default="[/realsense/camera/depth/points]"/ -->
+    <arg name="pointcloud_topics" default="[/d435i/depth/color/points]"/>
+
+    <!-- Define a static transform from a camera internal frame to the fcu for every camera used -->
+    <!-- node pkg="tf" type="static_transform_publisher" name="tf_depth_camera1"
+          args="0 0 0 0 0 0 world local_origin 10"/ -->
+
+    <node pkg="tf" type="static_transform_publisher" name="tf_depth_camera2"
+          args="0 0 0 0 0 0 fcu d435i_link 10"/>
+
+    <!-- Load custom console configuration -->
+    <env name="ROSCONSOLE_CONFIG_FILE" value="$(find local_planner)/resource/custom_rosconsole.conf"/>
+
+    <!-- Launch local planner -->
+    <node name="local_planner_node" pkg="local_planner" type="local_planner_node" output="screen" >
+        <param name="goal_x_param" value="0" />
+        <param name="goal_y_param" value="0"/>
+        <param name="goal_z_param" value="1.5" />
+        <rosparam param="pointcloud_topics" subst_value="True">$(arg pointcloud_topics)</rosparam>
+    </node>
+    
+</launch>
