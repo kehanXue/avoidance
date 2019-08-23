@@ -27,6 +27,13 @@
         <param name="goal_z_param" value="3" />
         <rosparam param="pointcloud_topics" subst_value="True">$(arg pointcloud_topics)</rosparam>
     </node>
+
+    <node name="stereo_image_proc_node" pkg="stereo_image_proc" type="stereo_image_proc" output="screen" >
+        <remap from="left/image_raw" to="/zed/zed_node/left_raw/image_raw_color" />
+        <remap from="left/camera_info" to="/zed/zed_node/left/camera_info" />
+        <remap from="right/image_raw" to="/zed/zed_node/right_raw/image_raw_color" />
+        <remap from="right/camera_info" to="/zed/zed_node/right_raw/camera_info" />
+    </node>
     
     <!-- Launch pointcloud generation from Realsense images -->  
     <arg name="camera_info" value="/zed/zed_node/rgb_raw/camera_info"/>

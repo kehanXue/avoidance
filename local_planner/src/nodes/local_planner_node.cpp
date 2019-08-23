@@ -4,6 +4,7 @@
 #include "local_planner/planner_functions.h"
 #include "local_planner/tree_node.h"
 #include "local_planner/waypoint_generator.h"
+#include "local_planner/smooth_setpoint_position.h"
 
 #include <boost/algorithm/string.hpp>
 
@@ -311,8 +312,12 @@ void LocalPlannerNode::calculateWaypoints(bool hover) {
     mavros_vel_setpoint_pub_.publish(toTwist(result.linear_velocity_wp, result.angular_velocity_wp));
     transformVelocityToTrajectory(obst_free_path, toTwist(result.linear_velocity_wp, result.angular_velocity_wp));
   } else {
-    mavros_pos_setpoint_pub_.publish(toPoseStamped(result.position_wp, result.orientation_wp));
-    transformPoseToTrajectory(obst_free_path, toPoseStamped(result.position_wp, result.orientation_wp));
+    geometry_msgs::PoseStamped goal_pose = toPoseStamped(result.position_wp, result.orientation_wp);
+    smooth_setpoint_position(goal_pose, newest_pose_);
+    mavros_pos_setpoint_pub_.publish(goal_pose);
+    transformPoseToTrajectory(obst_free_path, goal_pose);
+    // mavros_pos_setpoint_pub_.publish(toPoseStamped(result.position_wp, result.orientation_wp));
+    // transformPoseToTrajectory(obst_free_path, toPoseStamped(result.position_wp, result.orientation_wp));
   }
   mavros_obstacle_free_path_pub_.publish(obst_free_path);
 }
@@ -573,6 +578,7 @@ void LocalPlannerNode::pointCloudTransformThread(int index) {
           new std::lock_guard<std::mutex>(*(cameras_[index].cloud_msg_mutex_)));
 
       tf::StampedTransform transform;
+      std::cout << "Current header stamped: " << cameras_[index].newest_cloud_msg_.header.stamp << std::endl;
       if (tf_buffer_.getTransform(cameras_[index].newest_cloud_msg_.header.frame_id, "/local_origin",
                                   cameras_[index].newest_cloud_msg_.header.stamp, transform)) {
         pcl::PointCloud<pcl::PointXYZ> pcl_cloud;
