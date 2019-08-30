@@ -1,0 +1,19 @@
+<!-- SITL launch file which uses an authentic gazebo model of the Realsense camera-->
+<!-- To be able to run this complete the following steps:-->
+<!-- Clone this package into catkin_ws and build:-->
+<!-- git clone git@github.com:SyrianSpock/realsense_gazebo_plugin.git-->
+<!-- catkin build realsense_gazebo_plugin (for ROS kinetic, the kinetic-devel branch must be used)-->
+<!-- Add to Gazebo model path:-->
+<!-- export GAZEBO_MODEL_PATH=${GAZEBO_MODEL_PATH}:my_path/catkin_ws/src/realsense_gazebo_plugin/models-->
+
+
+<launch>
+
+    <node name="stereo_image_proc_node" pkg="stereo_image_proc" type="stereo_image_proc" output="screen" >
+        <remap from="left/image_raw" to="/zed/zed_node/left_raw/image_raw_color" />
+        <remap from="left/camera_info" to="/zed/zed_node/left/camera_info" />
+        <remap from="right/image_raw" to="/zed/zed_node/right_raw/image_raw_color" />
+        <remap from="right/camera_info" to="/zed/zed_node/right_raw/camera_info" />
+    </node>
+   
+</launch>

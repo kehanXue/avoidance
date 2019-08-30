@@ -4,6 +4,7 @@
 #include "local_planner/planner_functions.h"
 #include "local_planner/tree_node.h"
 #include "local_planner/waypoint_generator.h"
+#include "local_planner/smooth_setpoint_position.h"
 
 #include <boost/algorithm/string.hpp>
 
@@ -299,11 +300,25 @@ void LocalPlannerNode::calculateWaypoints(bool hover) {
 
   // send waypoints to mavros
   mavros_msgs::Trajectory obst_free_path = {};
-  transformToTrajectory(obst_free_path, toPoseStamped(result.position_wp, result.orientation_wp),
+  geometry_msgs::PoseStamped goal_pose = toPoseStamped(result.position_wp, result.orientation_wp);
+  smooth_setpoint_position(goal_pose, newest_pose_);
+  mavros_pos_setpoint_pub_.publish(goal_pose);
+  // mavros_pos_setpoint_pub_.publish(toPoseStamped(result.position_wp, result.orientation_wp));
+  transformToTrajectory(obst_free_path, goal_pose,
                         toTwist(result.linear_velocity_wp, result.angular_velocity_wp));
-  mavros_pos_setpoint_pub_.publish(toPoseStamped(result.position_wp, result.orientation_wp));
-
   mavros_obstacle_free_path_pub_.publish(obst_free_path);
+
+  // if (local_planner_->use_vel_setpoints_) {
+  //   mavros_vel_setpoint_pub_.publish(toTwist(result.linear_velocity_wp, result.angular_velocity_wp));
+  //   transformVelocityToTrajectory(obst_free_path, toTwist(result.linear_velocity_wp, result.angular_velocity_wp));
+  // } else {
+  //   geometry_msgs::PoseStamped goal_pose = toPoseStamped(result.position_wp, result.orientation_wp);
+  //   smooth_setpoint_position(goal_pose, newest_pose_);
+  //   mavros_pos_setpoint_pub_.publish(goal_pose);
+  //   transformPoseToTrajectory(obst_free_path, goal_pose);
+  // mavros_pos_setpoint_pub_.publish(toPoseStamped(result.position_wp, result.orientation_wp));
+  // transformPoseToTrajectory(obst_free_path, toPoseStamped(result.position_wp, result.orientation_wp));
+  // }
 }
 
 void LocalPlannerNode::clickedPointCallback(const geometry_msgs::PointStamped& msg) {
@@ -315,7 +330,7 @@ void LocalPlannerNode::clickedGoalCallback(const geometry_msgs::PoseStamped& msg
   goal_msg_ = msg;
   /* Selecting the goal from Rviz sets x and y. Get the z coordinate set in
    * the launch file */
-  goal_msg_.pose.position.z = local_planner_->getGoal().z();
+  // goal_msg_.pose.position.z = local_planner_->getGoal().z();
 }
 
 void LocalPlannerNode::updateGoalCallback(const visualization_msgs::MarkerArray& msg) {

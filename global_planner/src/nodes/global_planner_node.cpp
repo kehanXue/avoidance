@@ -29,6 +29,7 @@ GlobalPlannerNode::GlobalPlannerNode(const ros::NodeHandle& nh, const ros::NodeH
   clicked_point_sub_ = nh_.subscribe("/clicked_point", 1, &GlobalPlannerNode::clickedPointCallback, this);
   move_base_simple_sub_ = nh_.subscribe("/move_base_simple/goal", 1, &GlobalPlannerNode::moveBaseSimpleCallback, this);
   fcu_input_sub_ = nh_.subscribe("/mavros/trajectory/desired", 1, &GlobalPlannerNode::fcuInputGoalCallback, this);
+  point_goal_sub_ = nh_.subscribe("/point_goal", 1, &GlobalPlannerNode::pointGoalCallback, this);
 
   // Publishers
   global_temp_path_pub_ = nh_.advertise<nav_msgs::Path>("/global_temp_path", 10);
@@ -67,6 +68,8 @@ GlobalPlannerNode::GlobalPlannerNode(const ros::NodeHandle& nh, const ros::NodeH
   speed_ = 5.0;
 
   start_time_ = ros::Time::now();
+
+  ROS_ERROR("Node Initial successfully!");
 }
 
 GlobalPlannerNode::~GlobalPlannerNode() {}
@@ -124,6 +127,9 @@ void GlobalPlannerNode::planPath() {
   if (global_planner_.octree_) {
     ROS_INFO("OctoMap memory usage: %2.3f MB", global_planner_.octree_->memoryUsage() / 1000000.0);
   }
+  else {
+    ROS_ERROR("global_planner_.octree is null");
+  }
 
   bool found_path = global_planner_.getGlobalPath();
 
@@ -134,6 +140,7 @@ void GlobalPlannerNode::planPath() {
   } else if (global_planner_.overestimate_factor_ > 1.05) {
     // The path is not good enough, set an intermediate goal on the path
     setIntermediateGoal();
+    ROS_INFO("Find a path");
   }
   printf("Total time: %2.2f ms \n", (std::clock() - start_time) / (double)(CLOCKS_PER_SEC / 1000));
 }
@@ -251,9 +258,14 @@ void GlobalPlannerNode::fcuInputGoalCallback(const mavros_msgs::Trajectory& msg)
   }
 }
 
+void GlobalPlannerNode::pointGoalCallback(const geometry_msgs::Point& msg) {
+    setNewGoal(GoalCell(msg.x, msg.y, msg.z));
+}
+
 // Check if the current path is blocked
 void GlobalPlannerNode::octomapFullCallback(const octomap_msgs::Octomap& msg) {
   std::lock_guard<std::mutex> lock(mutex_);
+  ROS_WARN("Octomap locked!");
 
   ros::Time current = ros::Time::now();
   // Update map at a fixed rate. This is useful on setting replanning rates for the planner.
@@ -269,12 +281,15 @@ void GlobalPlannerNode::octomapFullCallback(const octomap_msgs::Octomap& msg) {
 
 // Go through obstacle points and store them
 void GlobalPlannerNode::depthCameraCallback(const sensor_msgs::PointCloud2& msg) {
+    ROS_ERROR("!!!!!!!!!!!!!!!!!!Get in PointCloud2 topic!!!!!!!!!!!!!!!!!!!!!!");
   try {
     // Transform msg from camera frame to world frame
     ros::Time now = ros::Time::now();
-    listener_.waitForTransform(frame_id_, "/camera_link", now, ros::Duration(5.0));
+    // listener_.waitForTransform(frame_id_, "/camera_link", now, ros::Duration(5.0));
+    listener_.waitForTransform(frame_id_, msg.header.frame_id, now, ros::Duration(5.0));
     tf::StampedTransform transform;
-    listener_.lookupTransform(frame_id_, "/camera_link", now, transform);
+    // listener_.lookupTransform(frame_id_, "/camera_link", now, transform);
+    listener_.waitForTransform(frame_id_, msg.header.frame_id, now, ros::Duration(5.0));
     sensor_msgs::PointCloud2 transformed_msg;
     pcl_ros::transformPointCloud(frame_id_, transform, msg, transformed_msg);
     pcl::PointCloud<pcl::PointXYZ> cloud;  // Easier to loop through pcl::PointCloud
@@ -291,7 +306,7 @@ void GlobalPlannerNode::depthCameraCallback(const sensor_msgs::PointCloud2& msg)
     pointcloud_pub_.publish(msg);
   } catch (tf::TransformException const& ex) {
     ROS_DEBUG("%s", ex.what());
-    ROS_WARN("Transformation not available (%s to /camera_link", frame_id_);
+    ROS_WARN("Transformation not available (%s to %s", frame_id_.c_str(), msg.header.frame_id.c_str());
   }
 }
 
@@ -319,18 +334,24 @@ void GlobalPlannerNode::cmdLoopCallback(const ros::TimerEvent& event) {
   ros::Duration since_last_cloud = now - last_wp_time_;
   ros::Duration since_start = now - start_time_;
 
+  ROS_WARN("Set a new setpoint!");
   avoidance_node_.checkFailsafe(since_last_cloud, since_start, hover_);
   publishSetpoint();
 }
 
 void GlobalPlannerNode::plannerLoopCallback(const ros::TimerEvent& event) {
+  ROS_WARN("Planner waiting for lock!");
   std::lock_guard<std::mutex> lock(mutex_);
+  ROS_WARN("Planner getting a lock!");
   bool is_in_goal = global_planner_.goal_pos_.withinPositionRadius(global_planner_.curr_pos_);
+  ROS_ERROR("Next step");
   if (is_in_goal || global_planner_.goal_is_blocked_) {
     popNextGoal();
   }
 
+  ROS_WARN("Prepare Plan a path!");
   planPath();
+  ROS_WARN("Finished Plan a path!");
 
   // Print and publish info
   if (is_in_goal && !waypoints_.empty()) {
@@ -340,7 +361,9 @@ void GlobalPlannerNode::plannerLoopCallback(const ros::TimerEvent& event) {
              pathEnergy(actual_path_, global_planner_.up_cost_));
   }
 
+  ROS_ERROR("Start publish path");
   publishPath();
+  ROS_ERROR("Succefully publish path");
 }
 
 // Publish the position of goal

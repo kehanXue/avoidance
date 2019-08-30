@@ -143,6 +143,7 @@ set(LOCAL_PLANNER_CPP_FILES   "src/nodes/local_planner.cpp"
                               "src/nodes/local_planner_node.cpp"
                               "src/nodes/local_planner_visualization.cpp"
                               "src/utils/trajectory_simulator.cpp"
+                              "src/utils/smooth_setpoint_position.cpp"
 )
 
 add_library(local_planner     "${LOCAL_PLANNER_CPP_FILES}")
