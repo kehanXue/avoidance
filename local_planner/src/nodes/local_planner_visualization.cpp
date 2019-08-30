@@ -25,13 +25,12 @@ void LocalPlannerVisualization::initializePublishers(ros::NodeHandle& nh) {
   path_waypoint_pub_ = nh.advertise<visualization_msgs::Marker>("/path_waypoint", 1);
   path_adapted_waypoint_pub_ = nh.advertise<visualization_msgs::Marker>("/path_adapted_waypoint", 1);
   current_waypoint_pub_ = nh.advertise<visualization_msgs::Marker>("/current_setpoint", 1);
-  takeoff_pose_pub_ = nh.advertise<visualization_msgs::Marker>("/take_off_pose", 1);
-  initial_height_pub_ = nh.advertise<visualization_msgs::Marker>("/initial_height", 1);
   histogram_image_pub_ = nh.advertise<sensor_msgs::Image>("/histogram_image", 1);
   cost_image_pub_ = nh.advertise<sensor_msgs::Image>("/cost_image", 1);
   closest_point_pub_ = nh.advertise<visualization_msgs::Marker>("/closest_point", 1);
   deg60_point_pub_ = nh.advertise<visualization_msgs::Marker>("/deg60_point", 1);
   fov_pub_ = nh.advertise<visualization_msgs::Marker>("/fov", 4);
+  range_scan_pub_ = nh.advertise<visualization_msgs::Marker>("/range_scan", 1);
 }
 
 void LocalPlannerVisualization::visualizePlannerData(const LocalPlanner& planner,
@@ -52,18 +51,15 @@ void LocalPlannerVisualization::visualizePlannerData(const LocalPlanner& planner
   // visualize goal
   publishGoal(toPoint(planner.getGoal()));
 
-  // publish bounding box of pointcloud
-  publishBox(planner.getPosition(), planner.histogram_box_.radius_, planner.histogram_box_.zmin_);
-
-  // publish data related to takeoff maneuver
-  publishReachHeight(planner.take_off_pose_, planner.starting_height_);
-
   // publish histogram image
   publishDataImages(planner.histogram_image_data_, planner.cost_image_data_, newest_waypoint_position,
                     newest_adapted_waypoint_position, newest_pose);
 
   // publish the FOV
-  publishFOV(planner.getFOV(), planner.histogram_box_.radius_);
+  publishFOV(planner.getFOV(), planner.getSensorRange());
+
+  // range scan
+  publishRangeScan(planner.distance_data_, newest_pose);
 }
 
 void LocalPlannerVisualization::publishFOV(const std::vector<FOV>& fov_vec, float max_range) const {
@@ -111,6 +107,56 @@ void LocalPlannerVisualization::publishFOV(const std::vector<FOV>& fov_vec, floa
 
     fov_pub_.publish(m);
   }
+}
+
+void LocalPlannerVisualization::publishRangeScan(const sensor_msgs::LaserScan& scan,
+                                                 const geometry_msgs::PoseStamped& newest_pose) const {
+  visualization_msgs::Marker m;
+  m.header.frame_id = "local_origin";
+  m.header.stamp = ros::Time::now();
+  m.id = 0;
+  m.type = visualization_msgs::Marker::TRIANGLE_LIST;
+  m.action = visualization_msgs::Marker::ADD;
+  m.scale.x = 1.0;
+  m.scale.y = 1.0;
+  m.scale.z = 1.0;
+  m.color.a = 0.7;
+  m.color.r = 1.0;
+  m.color.g = 1.0;
+  m.color.b = 1.0;
+
+  std_msgs::ColorRGBA c;
+  c.a = 0.7;
+
+  for (int i = 0; i < scan.ranges.size(); ++i) {
+    PolarPoint p1(0, RAD_TO_DEG * (i + 0.5) * scan.angle_increment, std::min(scan.range_max, scan.ranges[i]));
+    PolarPoint p2(0, RAD_TO_DEG * (i - 0.5) * scan.angle_increment, std::min(scan.range_max, scan.ranges[i]));
+
+    if (std::isnan(scan.ranges[i])) {
+      c.r = 1.0;
+      c.g = 0.0;
+      c.b = 0.0;
+    } else if (scan.ranges[i] > scan.range_max) {
+      c.r = 0.0;
+      c.g = 1.0;
+      c.b = 0.0;
+
+    } else {
+      c.g = scan.ranges[i] / scan.range_max;
+      c.r = 1.0 - scan.ranges[i] / scan.range_max;
+      c.b = 0.0;
+    }
+    m.colors.push_back(c);
+    m.colors.push_back(c);
+    m.colors.push_back(c);
+
+    // side 1
+    m.points.push_back(newest_pose.pose.position);
+    m.points.push_back(toPoint(polarHistogramToCartesian(p1, toEigen(newest_pose.pose.position))));
+    m.points.push_back(toPoint(polarHistogramToCartesian(p2, toEigen(newest_pose.pose.position))));
+  }
+
+  range_scan_pub_.publish(m);
 }
 
 void LocalPlannerVisualization::publishOfftrackPoints(Eigen::Vector3f& closest_pt, Eigen::Vector3f& deg60_pt) {
@@ -211,96 +257,6 @@ void LocalPlannerVisualization::publishGoal(const geometry_msgs::Point& goal) co
   m.pose.position = goal;
   marker_goal.markers.push_back(m);
   marker_goal_pub_.publish(marker_goal);
-}
-
-void LocalPlannerVisualization::publishBox(const Eigen::Vector3f& drone_pos, float box_radius,
-                                           float plane_height) const {
-  visualization_msgs::MarkerArray marker_array;
-
-  visualization_msgs::Marker box;
-  box.header.frame_id = "local_origin";
-  box.header.stamp = ros::Time::now();
-  box.id = 0;
-  box.type = visualization_msgs::Marker::SPHERE;
-  box.action = visualization_msgs::Marker::ADD;
-  box.pose.position = toPoint(drone_pos);
-  box.pose.orientation.x = 0.0;
-  box.pose.orientation.y = 0.0;
-  box.pose.orientation.z = 0.0;
-  box.pose.orientation.w = 1.0;
-  box.scale.x = 2.0 * box_radius;
-  box.scale.y = 2.0 * box_radius;
-  box.scale.z = 2.0 * box_radius;
-  box.color.a = 0.5;
-  box.color.r = 0.0;
-  box.color.g = 1.0;
-  box.color.b = 0.0;
-  marker_array.markers.push_back(box);
-
-  visualization_msgs::Marker plane;
-  plane.header.frame_id = "local_origin";
-  plane.header.stamp = ros::Time::now();
-  plane.id = 1;
-  plane.type = visualization_msgs::Marker::CUBE;
-  plane.action = visualization_msgs::Marker::ADD;
-  plane.pose.position = toPoint(drone_pos);
-  plane.pose.position.z = plane_height;
-  plane.pose.orientation.x = 0.0;
-  plane.pose.orientation.y = 0.0;
-  plane.pose.orientation.z = 0.0;
-  plane.pose.orientation.w = 1.0;
-  plane.scale.x = 2.0 * box_radius;
-  plane.scale.y = 2.0 * box_radius;
-  plane.scale.z = 0.001;
-  plane.color.a = 0.5;
-  plane.color.r = 0.0;
-  plane.color.g = 1.0;
-  plane.color.b = 0.0;
-  marker_array.markers.push_back(plane);
-
-  bounding_box_pub_.publish(marker_array);
-}
-
-void LocalPlannerVisualization::publishReachHeight(const Eigen::Vector3f& take_off_pose, float starting_height) const {
-  visualization_msgs::Marker m;
-  m.header.frame_id = "local_origin";
-  m.header.stamp = ros::Time::now();
-  m.type = visualization_msgs::Marker::CUBE;
-  m.pose.position.x = take_off_pose.x();
-  m.pose.position.y = take_off_pose.y();
-  m.pose.position.z = starting_height;
-  m.pose.orientation.x = 0.0;
-  m.pose.orientation.y = 0.0;
-  m.pose.orientation.z = 0.0;
-  m.pose.orientation.w = 1.0;
-  m.scale.x = 10;
-  m.scale.y = 10;
-  m.scale.z = 0.001;
-  m.color.a = 0.5;
-  m.color.r = 0.0;
-  m.color.g = 0.0;
-  m.color.b = 1.0;
-  m.lifetime = ros::Duration(0.5);
-  m.id = 0;
-
-  initial_height_pub_.publish(m);
-
-  visualization_msgs::Marker t;
-  t.header.frame_id = "local_origin";
-  t.header.stamp = ros::Time::now();
-  t.type = visualization_msgs::Marker::SPHERE;
-  t.action = visualization_msgs::Marker::ADD;
-  t.scale.x = 0.2;
-  t.scale.y = 0.2;
-  t.scale.z = 0.2;
-  t.color.a = 1.0;
-  t.color.r = 1.0;
-  t.color.g = 0.0;
-  t.color.b = 0.0;
-  t.lifetime = ros::Duration();
-  t.id = 0;
-  t.pose.position = toPoint(take_off_pose);
-  takeoff_pose_pub_.publish(t);
 }
 
 void LocalPlannerVisualization::publishDataImages(const std::vector<uint8_t>& histogram_image_data,
@@ -539,31 +495,5 @@ void LocalPlannerVisualization::publishCurrentSetpoint(const geometry_msgs::Twis
   }
 
   current_waypoint_pub_.publish(setpoint);
-}
-
-void LocalPlannerVisualization::publishGround(const Eigen::Vector3f& drone_pos, float box_radius,
-                                              float ground_distance) const {
-  visualization_msgs::Marker plane;
-
-  plane.header.frame_id = "local_origin";
-  plane.header.stamp = ros::Time::now();
-  plane.id = 1;
-  plane.type = visualization_msgs::Marker::CUBE;
-  plane.action = visualization_msgs::Marker::ADD;
-  plane.pose.position = toPoint(drone_pos);
-  plane.pose.position.z = drone_pos.z() - static_cast<double>(ground_distance);
-  plane.pose.orientation.x = 0.0;
-  plane.pose.orientation.y = 0.0;
-  plane.pose.orientation.z = 0.0;
-  plane.pose.orientation.w = 1.0;
-  plane.scale.x = 2.0 * box_radius;
-  plane.scale.y = 2.0 * box_radius;
-  plane.scale.z = 0.001;
-  ;
-  plane.color.a = 0.5;
-  plane.color.r = 0.0;
-  plane.color.g = 0.0;
-  plane.color.b = 1.0;
-  ground_measurement_pub_.publish(plane);
 }
 }

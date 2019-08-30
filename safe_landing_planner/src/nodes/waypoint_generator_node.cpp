@@ -1,6 +1,5 @@
 #include "safe_landing_planner/waypoint_generator_node.hpp"
 
-#include "avoidance/common.h"
 #include "safe_landing_planner/safe_landing_planner.hpp"
 #include "tf/transform_datatypes.h"
 
@@ -15,7 +14,6 @@ WaypointGeneratorNode::WaypointGeneratorNode(const ros::NodeHandle &nh) : nh_(nh
   pose_sub_ = nh_.subscribe<const geometry_msgs::PoseStamped &>("/mavros/local_position/pose", 1,
                                                                 &WaypointGeneratorNode::positionCallback, this);
   trajectory_sub_ = nh_.subscribe("/mavros/trajectory/desired", 1, &WaypointGeneratorNode::trajectoryCallback, this);
-  mission_sub_ = nh_.subscribe("/mavros/mission/waypoints", 1, &WaypointGeneratorNode::missionCallback, this);
   state_sub_ = nh_.subscribe("/mavros/state", 1, &WaypointGeneratorNode::stateCallback, this);
   grid_sub_ = nh_.subscribe("/grid_slp", 1, &WaypointGeneratorNode::gridCallback, this);
 
@@ -53,14 +51,13 @@ void WaypointGeneratorNode::cmdLoopCallback(const ros::TimerEvent &event) {
 void WaypointGeneratorNode::dynamicReconfigureCallback(safe_landing_planner::WaypointGeneratorNodeConfig &config,
                                                        uint32_t level) {
   waypointGenerator_.beta_ = static_cast<float>(config.beta);
-  waypointGenerator_.landing_radius_ = static_cast<float>(config.landing_radius);
   waypointGenerator_.can_land_thr_ = static_cast<float>(config.can_land_thr);
   waypointGenerator_.loiter_height_ = static_cast<float>(config.loiter_height);
   waypointGenerator_.smoothing_land_cell_ = config.smoothing_land_cell;
   waypointGenerator_.vertical_range_error_ = static_cast<float>(config.vertical_range_error);
   waypointGenerator_.spiral_width_ = static_cast<float>(config.spiral_width);
 
-  if (waypointGenerator_.can_land_hysteresis_.size() != std::pow((waypointGenerator_.smoothing_land_cell_ * 2), 2)) {
+  if (waypointGenerator_.mask_.rows() != ((waypointGenerator_.smoothing_land_cell_ * 2) + 1)) {
     waypointGenerator_.update_smoothing_size_ = true;
   }
 }
@@ -83,7 +80,7 @@ void WaypointGeneratorNode::trajectoryCallback(const mavros_msgs::Trajectory &ms
   if (update && msg.point_valid[0] == true) {
     waypointGenerator_.goal_ = avoidance::toEigen(msg.point_1.position);
     waypointGenerator_.velocity_setpoint_ = avoidance::toEigen(msg.point_1.velocity);
-
+    waypointGenerator_.is_land_waypoint_ = (msg.command[1] == static_cast<int>(MavCommand::MAV_CMD_NAV_LAND));
     ROS_INFO_STREAM("\033[1;33m [WGN] Set New goal from FCU " << waypointGenerator_.goal_.transpose()
                                                               << " - nan nan nan \033[0m");
   }
@@ -91,15 +88,6 @@ void WaypointGeneratorNode::trajectoryCallback(const mavros_msgs::Trajectory &ms
     goal_visualization_ = avoidance::toEigen(msg.point_2.position);
     waypointGenerator_.yaw_setpoint_ = msg.point_2.yaw;
     waypointGenerator_.yaw_speed_setpoint_ = msg.point_2.yaw_rate;
-  }
-}
-
-void WaypointGeneratorNode::missionCallback(const mavros_msgs::WaypointList &msg) {
-  waypointGenerator_.is_land_waypoint_ = false;
-  for (auto waypoint : msg.waypoints) {
-    if (waypoint.is_current && waypoint.command == 21) {
-      waypointGenerator_.is_land_waypoint_ = true;
-    }
   }
 }
 
@@ -216,28 +204,33 @@ void WaypointGeneratorNode::landingAreaVisualization() {
   Eigen::Vector2f grid_min, grid_max;
   waypointGenerator_.grid_slp_.getGridLimits(grid_min, grid_max);
   int offset = waypointGenerator_.grid_slp_.land_.rows() / 2;
-  int counter = 0;
+
+  Eigen::MatrixXi kernel(waypointGenerator_.can_land_hysteresis_matrix_.rows(),
+                         waypointGenerator_.can_land_hysteresis_matrix_.cols());
+  kernel.fill(0);
+  kernel.block(20 - waypointGenerator_.smoothing_land_cell_, 20 - waypointGenerator_.smoothing_land_cell_,
+               waypointGenerator_.mask_.rows(), waypointGenerator_.mask_.cols()) = waypointGenerator_.mask_;
+
+  Eigen::MatrixXi result = waypointGenerator_.can_land_hysteresis_result_.cwiseProduct(kernel);
 
   int slc = waypointGenerator_.smoothing_land_cell_;
-  for (size_t i = 0; i < waypointGenerator_.grid_slp_.getRowColSize(); i++) {
-    for (size_t j = 0; j < waypointGenerator_.grid_slp_.getRowColSize(); j++) {
-      if (i >= (offset - slc) && i <= (offset + slc) && j >= (offset - slc) && j <= (offset + slc)) {
-        cell.pose.position.x = (i * cell_size) + grid_min.x() + (cell_size / 2.f);
-        cell.pose.position.y = (j * cell_size) + grid_min.y() + (cell_size / 2.f);
-        cell.pose.position.z = 1.0;
-        if (waypointGenerator_.can_land_hysteresis_[counter] > waypointGenerator_.can_land_thr_) {
-          cell.color.r = 0.0;
-          cell.color.g = 1.0;
-        } else {
-          cell.color.r = 1.0;
-          cell.color.g = 0.0;
-        }
-        cell.color.a = 0.5;
-        counter++;
 
-        marker_array.markers.push_back(cell);
-        cell.id += 1;
+  for (size_t k = offset - slc; k <= offset + slc; k++) {
+    for (size_t l = offset - slc; l <= offset + slc; l++) {
+      cell.pose.position.x = grid_min.x() + (cell_size * k);
+      cell.pose.position.y = grid_min.y() + (cell_size * l);
+      cell.pose.position.z = 1;
+      if (result(k, l)) {
+        cell.color.r = 0.0;
+        cell.color.g = 1.0;
+      } else {
+        cell.color.r = 1.0;
+        cell.color.g = 0.0;
       }
+      cell.color.a = 0.5;
+
+      marker_array.markers.push_back(cell);
+      cell.id += 1;
     }
   }
   land_hysteresis_pub_.publish(marker_array);

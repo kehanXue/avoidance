@@ -39,6 +39,12 @@ enum class NavigationState {
   none,
 };
 
+enum class MavCommand {
+  MAV_CMD_NAV_LAND = 21,
+  MAV_CMD_NAV_TAKEOFF,
+  MAV_CMD_DO_CHANGE_SPEED = 178,
+};
+
 struct PolarPoint {
   PolarPoint(float e_, float z_, float r_) : e(e_), z(z_), r(r_){};
   PolarPoint() : e(0.0f), z(0.0f), r(0.0f){};
@@ -61,6 +67,39 @@ struct FOV {
   float v_fov_deg;
 };
 
+/**
+* @brief struct to contain the parameters needed for the model based trajectory
+*planning
+* when MPC_AUTO_MODE is set to 1 (default) then all members are used for the
+*jerk limited
+* trajectory on the flight controller side
+* when MPC_AUTO_MODE is set to 0, only up_accl, down_accl, xy_acc are used on
+*the
+* flight controller side
+**/
+struct ModelParameters {
+  // clang-format off
+  int param_mpc_auto_mode = -1; // Auto sub-mode - 0: default line tracking, 1 jerk-limited trajectory
+  float param_mpc_jerk_min = NAN; // Velocity-based minimum jerk limit
+  float param_mpc_jerk_max = NAN; // Velocity-based maximum jerk limit
+  float param_acc_up_max = NAN;   // Maximum vertical acceleration in velocity controlled modes upward
+  float param_mpc_z_vel_max_up = NAN;   // Maximum vertical ascent velocity
+  float param_mpc_acc_down_max = NAN; // Maximum vertical acceleration in velocity controlled modes down
+  float param_mpc_vel_max_dn = NAN; // Maximum vertical descent velocity
+  float param_mpc_acc_hor = NAN;  // Maximum horizontal acceleration for auto mode and
+                      // maximum deceleration for manual mode
+  float param_mpc_xy_cruise = NAN;   // Desired horizontal velocity in mission
+  float param_mpc_tko_speed = NAN; // Takeoff climb rate
+  float param_mpc_land_speed = NAN;   // Landing descend rate
+
+  float param_nav_acc_rad = NAN;
+
+  // TODO: add estimator limitations for max speed and height
+
+  float param_mpc_col_prev_d = NAN; // Collision Prevention distance to keep from obstacle. -1 for disabled
+  // clang-format on
+};
+
 #define M_PI_F 3.14159265358979323846f
 #define WARN_UNUSED __attribute__((warn_unused_result))
 
@@ -75,6 +114,19 @@ const float RAD_TO_DEG = 180.0f / M_PI_F;
 **/
 bool pointInsideFOV(const std::vector<FOV>& fov_vec, const PolarPoint& p_pol);
 bool pointInsideFOV(const FOV& fov, const PolarPoint& p_pol);
+
+/**
+* @brief      determines whether a histogram cell lies inside the horizontal FOV
+*             cell is considered inside if at least one edge lies inside
+* @param[in]  vector of FOV structs defining current field of view
+* @param[in]  idx, histogram cell column index
+* @param[in]  position, current position
+* @param[in]  yaw_fcu_frame, yaw orientation of the vehicle in global fcu frame
+* @return     whether point is inside the FOV
+**/
+bool histogramIndexYawInsideFOV(const std::vector<FOV>& fov_vec, const int idx, Eigen::Vector3f position,
+                                float yaw_fcu_frame);
+bool histogramIndexYawInsideFOV(const FOV& fov, const int idx, Eigen::Vector3f position, float yaw_fcu_frame);
 
 /**
 * @brief      determines whether point is inside the Yaw of the FOV
@@ -265,34 +317,14 @@ float angleDifference(float a, float b);
 **/
 double getAngularVelocity(float desired_yaw, float curr_yaw);
 
-Eigen::Vector3f toEigen(const geometry_msgs::Point& p);
-Eigen::Vector3f toEigen(const geometry_msgs::Vector3& v3);
-Eigen::Vector3f toEigen(const pcl::PointXYZ& p);
-Eigen::Vector3f toEigen(const pcl::PointXYZI& p);
-Eigen::Quaternionf toEigen(const geometry_msgs::Quaternion& gmq);
-
-geometry_msgs::Point toPoint(const Eigen::Vector3f& ev3);
-geometry_msgs::Vector3 toVector3(const Eigen::Vector3f& ev3);
-geometry_msgs::Quaternion toQuaternion(const Eigen::Quaternionf& qf3);
-pcl::PointXYZ toXYZ(const Eigen::Vector3f& ev3);
-pcl::PointXYZI toXYZI(const Eigen::Vector3f& ev3, float intensity);
-pcl::PointXYZI toXYZI(float x, float y, float z, float intensity);
-pcl::PointXYZI toXYZI(const pcl::PointXYZ& xyz, float intensity);
-geometry_msgs::Twist toTwist(const Eigen::Vector3f& l, const Eigen::Vector3f& a);
-geometry_msgs::PoseStamped toPoseStamped(const Eigen::Vector3f& p, const Eigen::Quaternionf& q);
 /**
-* @brief     transforms position setpoints from ROS message to MavROS message
-* @params[out] obst_avoid, position setpoint in MavROS message form
-* @params[in] pose, position setpoint computed by the planner
+* @brief     transforms setpoints from ROS message to MavROS message
+* @params[out] obst_avoid, setpoint in MavROS message form
+* @params[in] pose, position and attitude setpoint computed by the planner
+* @params[in] vel, velocity setpoint computed by the planner
 **/
-void transformPoseToTrajectory(mavros_msgs::Trajectory& obst_avoid, geometry_msgs::PoseStamped pose);
-/**
-* @brief      transforms velocity setpoints from ROS message to MavROS
-*             message
-* @param[out] obst_avoid, velocity setpoint in MavROS message form
-* @param[in]  vel, velocity setpoint computd by the planner
-**/
-void transformVelocityToTrajectory(mavros_msgs::Trajectory& obst_avoid, geometry_msgs::Twist vel);
+void transformToTrajectory(mavros_msgs::Trajectory& obst_avoid, geometry_msgs::PoseStamped pose,
+                           geometry_msgs::Twist vel);
 
 /**
 * @brief      fills MavROS trajectory messages with NAN
@@ -320,6 +352,111 @@ pcl::PointCloud<pcl::PointXYZ> removeNaNAndGetMaxima(pcl::PointCloud<pcl::PointX
 *                  bigger FOV than previously thought
 **/
 void updateFOVFromMaxima(FOV& fov, const pcl::PointCloud<pcl::PointXYZ>& maxima);
+
+inline Eigen::Vector3f toEigen(const geometry_msgs::Point& p) {
+  Eigen::Vector3f ev3(p.x, p.y, p.z);
+  return ev3;
+}
+
+inline Eigen::Vector3f toEigen(const geometry_msgs::Vector3& v3) {
+  Eigen::Vector3f ev3(v3.x, v3.y, v3.z);
+  return ev3;
+}
+
+inline Eigen::Vector3f toEigen(const pcl::PointXYZ& p) {
+  Eigen::Vector3f ev3(p.x, p.y, p.z);
+  return ev3;
+}
+
+inline Eigen::Vector3f toEigen(const pcl::PointXYZI& p) {
+  Eigen::Vector3f ev3(p.x, p.y, p.z);
+  return ev3;
+}
+
+inline Eigen::Quaternionf toEigen(const geometry_msgs::Quaternion& gmq) {
+  Eigen::Quaternionf eqf;
+  eqf.x() = gmq.x;
+  eqf.y() = gmq.y;
+  eqf.z() = gmq.z;
+  eqf.w() = gmq.w;
+  return eqf;
+}
+
+inline geometry_msgs::Point toPoint(const Eigen::Vector3f& ev3) {
+  geometry_msgs::Point gmp;
+  gmp.x = ev3.x();
+  gmp.y = ev3.y();
+  gmp.z = ev3.z();
+  return gmp;
+}
+
+inline geometry_msgs::Vector3 toVector3(const Eigen::Vector3f& ev3) {
+  geometry_msgs::Vector3 gmv3;
+  gmv3.x = ev3.x();
+  gmv3.y = ev3.y();
+  gmv3.z = ev3.z();
+  return gmv3;
+}
+
+inline geometry_msgs::Quaternion toQuaternion(const Eigen::Quaternionf& eqf) {
+  geometry_msgs::Quaternion q;
+  q.x = eqf.x();
+  q.y = eqf.y();
+  q.z = eqf.z();
+  q.w = eqf.w();
+  return q;
+}
+
+inline pcl::PointXYZ toXYZ(const Eigen::Vector3f& ev3) {
+  pcl::PointXYZ xyz;
+  xyz.x = ev3.x();
+  xyz.y = ev3.y();
+  xyz.z = ev3.z();
+  return xyz;
+}
+
+inline pcl::PointXYZI toXYZI(const Eigen::Vector3f& ev3, float intensity) {
+  pcl::PointXYZI p;
+  p.x = ev3.x();
+  p.y = ev3.y();
+  p.z = ev3.z();
+  p.intensity = intensity;
+  return p;
+}
+
+inline pcl::PointXYZI toXYZI(float x, float y, float z, float intensity) {
+  pcl::PointXYZI p;
+  p.x = x;
+  p.y = y;
+  p.z = z;
+  p.intensity = intensity;
+  return p;
+}
+
+inline pcl::PointXYZI toXYZI(const pcl::PointXYZ& xyz, float intensity) {
+  pcl::PointXYZI p;
+  p.x = xyz.x;
+  p.y = xyz.y;
+  p.z = xyz.z;
+  p.intensity = intensity;
+  return p;
+}
+
+inline geometry_msgs::Twist toTwist(const Eigen::Vector3f& l, const Eigen::Vector3f& a) {
+  geometry_msgs::Twist gmt;
+  gmt.linear = toVector3(l);
+  gmt.angular = toVector3(a);
+  return gmt;
+}
+
+inline geometry_msgs::PoseStamped toPoseStamped(const Eigen::Vector3f& ev3, const Eigen::Quaternionf& eq) {
+  geometry_msgs::PoseStamped gmps;
+  gmps.header.stamp = ros::Time::now();
+  gmps.header.frame_id = "/local_origin";
+  gmps.pose.position = toPoint(ev3);
+  gmps.pose.orientation = toQuaternion(eq);
+  return gmps;
+}
 
 }  // namespace avoidance
 

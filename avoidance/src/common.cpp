@@ -23,6 +23,37 @@ bool pointInsideFOV(const FOV& fov, const PolarPoint& p_pol) {
          p_pol.e <= fov.pitch_deg + fov.v_fov_deg / 2.f && p_pol.e >= fov.pitch_deg - fov.v_fov_deg / 2.f;
 }
 
+bool histogramIndexYawInsideFOV(const std::vector<FOV>& fov_vec, const int idx, Eigen::Vector3f position,
+                                float yaw_fcu_frame) {
+  PolarPoint pol_hist = histogramIndexToPolar(GRID_LENGTH_E / 2, idx, ALPHA_RES, 1.f);
+  Eigen::Vector3f cart = polarHistogramToCartesian(pol_hist, position);
+  PolarPoint pol_fcu = cartesianToPolarFCU(cart, position);  // z down convention
+  pol_fcu.z -= yaw_fcu_frame;                                // transform to fcu body frame
+  PolarPoint pol_fcu_plus = pol_fcu;
+  PolarPoint pol_fcu_minus = pol_fcu;
+  pol_fcu_plus.z += ALPHA_RES / 2.f;
+  pol_fcu_minus.z -= ALPHA_RES / 2.f;
+  wrapPolar(pol_fcu_plus);
+  wrapPolar(pol_fcu_minus);
+
+  return (pointInsideFOV(fov_vec, pol_fcu_plus) || pointInsideFOV(fov_vec, pol_fcu_minus));
+}
+
+bool histogramIndexYawInsideFOV(const FOV& fov, const int idx, Eigen::Vector3f position, float yaw_fcu_frame) {
+  PolarPoint pol_hist = histogramIndexToPolar(GRID_LENGTH_E / 2, idx, ALPHA_RES, 1.f);
+  Eigen::Vector3f cart = polarHistogramToCartesian(pol_hist, position);
+  PolarPoint pol_fcu = cartesianToPolarFCU(cart, position);  // z down convention
+  pol_fcu.z -= yaw_fcu_frame;                                // transform to fcu body frame
+  PolarPoint pol_fcu_plus = pol_fcu;
+  PolarPoint pol_fcu_minus = pol_fcu;
+  pol_fcu_plus.z += ALPHA_RES / 2.f;
+  pol_fcu_minus.z -= ALPHA_RES / 2.f;
+  wrapPolar(pol_fcu_plus);
+  wrapPolar(pol_fcu_minus);
+
+  return (pointInsideFOV(fov, pol_fcu_plus) || pointInsideFOV(fov, pol_fcu_minus));
+}
+
 bool pointInsideYawFOV(const std::vector<FOV>& fov_vec, const PolarPoint& p_pol) {
   for (auto fov : fov_vec) {
     if (pointInsideYawFOV(fov, p_pol)) {
@@ -247,149 +278,20 @@ double getAngularVelocity(float desired_yaw, float curr_yaw) {
   return 0.5 * static_cast<double>(vel);
 }
 
-Eigen::Vector3f toEigen(const geometry_msgs::Point& p) {
-  Eigen::Vector3f ev3(p.x, p.y, p.z);
-  return ev3;
-}
-
-Eigen::Vector3f toEigen(const geometry_msgs::Vector3& v3) {
-  Eigen::Vector3f ev3(v3.x, v3.y, v3.z);
-  return ev3;
-}
-
-Eigen::Vector3f toEigen(const pcl::PointXYZ& p) {
-  Eigen::Vector3f ev3(p.x, p.y, p.z);
-  return ev3;
-}
-
-Eigen::Vector3f toEigen(const pcl::PointXYZI& p) {
-  Eigen::Vector3f ev3(p.x, p.y, p.z);
-  return ev3;
-}
-
-Eigen::Quaternionf toEigen(const geometry_msgs::Quaternion& gmq) {
-  Eigen::Quaternionf eqf;
-  eqf.x() = gmq.x;
-  eqf.y() = gmq.y;
-  eqf.z() = gmq.z;
-  eqf.w() = gmq.w;
-  return eqf;
-}
-
-geometry_msgs::Point toPoint(const Eigen::Vector3f& ev3) {
-  geometry_msgs::Point gmp;
-  gmp.x = ev3.x();
-  gmp.y = ev3.y();
-  gmp.z = ev3.z();
-  return gmp;
-}
-
-geometry_msgs::Vector3 toVector3(const Eigen::Vector3f& ev3) {
-  geometry_msgs::Vector3 gmv3;
-  gmv3.x = ev3.x();
-  gmv3.y = ev3.y();
-  gmv3.z = ev3.z();
-  return gmv3;
-}
-
-geometry_msgs::Quaternion toQuaternion(const Eigen::Quaternionf& eqf) {
-  geometry_msgs::Quaternion q;
-  q.x = eqf.x();
-  q.y = eqf.y();
-  q.z = eqf.z();
-  q.w = eqf.w();
-  return q;
-}
-
-pcl::PointXYZ toXYZ(const Eigen::Vector3f& ev3) {
-  pcl::PointXYZ xyz;
-  xyz.x = ev3.x();
-  xyz.y = ev3.y();
-  xyz.z = ev3.z();
-  return xyz;
-}
-
-pcl::PointXYZI toXYZI(const Eigen::Vector3f& ev3, float intensity) {
-  pcl::PointXYZI p;
-  p.x = ev3.x();
-  p.y = ev3.y();
-  p.z = ev3.z();
-  p.intensity = intensity;
-  return p;
-}
-
-pcl::PointXYZI toXYZI(float x, float y, float z, float intensity) {
-  pcl::PointXYZI p;
-  p.x = x;
-  p.y = y;
-  p.z = z;
-  p.intensity = intensity;
-  return p;
-}
-
-pcl::PointXYZI toXYZI(const pcl::PointXYZ& xyz, float intensity) {
-  pcl::PointXYZI p;
-  p.x = xyz.x;
-  p.y = xyz.y;
-  p.z = xyz.z;
-  p.intensity = intensity;
-  return p;
-}
-
-geometry_msgs::Twist toTwist(const Eigen::Vector3f& l, const Eigen::Vector3f& a) {
-  geometry_msgs::Twist gmt;
-  gmt.linear = toVector3(l);
-  gmt.angular = toVector3(a);
-  return gmt;
-}
-
-geometry_msgs::PoseStamped toPoseStamped(const Eigen::Vector3f& ev3, const Eigen::Quaternionf& eq) {
-  geometry_msgs::PoseStamped gmps;
-  gmps.header.stamp = ros::Time::now();
-  gmps.header.frame_id = "/local_origin";
-  gmps.pose.position = toPoint(ev3);
-  gmps.pose.orientation = toQuaternion(eq);
-  return gmps;
-}
-
-void transformPoseToTrajectory(mavros_msgs::Trajectory& obst_avoid, geometry_msgs::PoseStamped pose) {
-  obst_avoid.header = pose.header;
+void transformToTrajectory(mavros_msgs::Trajectory& obst_avoid, geometry_msgs::PoseStamped pose,
+                           geometry_msgs::Twist vel) {
+  obst_avoid.header.stamp = ros::Time::now();
   obst_avoid.type = 0;  // MAV_TRAJECTORY_REPRESENTATION::WAYPOINTS
   obst_avoid.point_1.position.x = pose.pose.position.x;
   obst_avoid.point_1.position.y = pose.pose.position.y;
   obst_avoid.point_1.position.z = pose.pose.position.z;
-  obst_avoid.point_1.velocity.x = NAN;
-  obst_avoid.point_1.velocity.y = NAN;
-  obst_avoid.point_1.velocity.z = NAN;
-  obst_avoid.point_1.acceleration_or_force.x = NAN;
-  obst_avoid.point_1.acceleration_or_force.y = NAN;
-  obst_avoid.point_1.acceleration_or_force.z = NAN;
-  obst_avoid.point_1.yaw = tf::getYaw(pose.pose.orientation);
-  obst_avoid.point_1.yaw_rate = NAN;
-
-  fillUnusedTrajectoryPoint(obst_avoid.point_2);
-  fillUnusedTrajectoryPoint(obst_avoid.point_3);
-  fillUnusedTrajectoryPoint(obst_avoid.point_4);
-  fillUnusedTrajectoryPoint(obst_avoid.point_5);
-
-  obst_avoid.time_horizon = {NAN, NAN, NAN, NAN, NAN};
-
-  obst_avoid.point_valid = {true, false, false, false, false};
-}
-
-void transformVelocityToTrajectory(mavros_msgs::Trajectory& obst_avoid, geometry_msgs::Twist vel) {
-  obst_avoid.header.stamp = ros::Time::now();
-  obst_avoid.type = 0;  // MAV_TRAJECTORY_REPRESENTATION::WAYPOINTS
-  obst_avoid.point_1.position.x = NAN;
-  obst_avoid.point_1.position.y = NAN;
-  obst_avoid.point_1.position.z = NAN;
   obst_avoid.point_1.velocity.x = vel.linear.x;
   obst_avoid.point_1.velocity.y = vel.linear.y;
   obst_avoid.point_1.velocity.z = vel.linear.z;
   obst_avoid.point_1.acceleration_or_force.x = NAN;
   obst_avoid.point_1.acceleration_or_force.y = NAN;
   obst_avoid.point_1.acceleration_or_force.z = NAN;
-  obst_avoid.point_1.yaw = NAN;
+  obst_avoid.point_1.yaw = tf::getYaw(pose.pose.orientation);
   obst_avoid.point_1.yaw_rate = -vel.angular.z;
 
   fillUnusedTrajectoryPoint(obst_avoid.point_2);

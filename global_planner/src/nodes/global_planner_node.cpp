@@ -8,6 +8,7 @@ GlobalPlannerNode::GlobalPlannerNode(const ros::NodeHandle& nh, const ros::NodeH
       avoidance_node_(nh, nh_private),
       cmdloop_dt_(0.1),
       plannerloop_dt_(1.0),
+      mapupdate_dt_(0.2),
       start_yaw_(0.0) {
   // Set up Dynamic Reconfigure Server
   dynamic_reconfigure::Server<global_planner::GlobalPlannerNodeConfig>::CallbackType f;
@@ -63,7 +64,7 @@ GlobalPlannerNode::GlobalPlannerNode(const ros::NodeHandle& nh, const ros::NodeH
   current_goal_.pose.orientation = tf::createQuaternionMsgFromYaw(start_yaw_);
   last_goal_ = current_goal_;
 
-  speed_ = 2.0;
+  speed_ = 5.0;
 
   start_time_ = ros::Time::now();
 }
@@ -84,6 +85,7 @@ void GlobalPlannerNode::readParams() {
   global_planner_.goal_pos_ = GoalCell(start_pos_.x, start_pos_.y, start_pos_.z);
   double robot_radius;
   nh_.param<double>("robot_radius", robot_radius, 0.5);
+  global_planner_.setFrame(frame_id_);
   global_planner_.setRobotRadius(robot_radius);
 }
 
@@ -251,12 +253,18 @@ void GlobalPlannerNode::fcuInputGoalCallback(const mavros_msgs::Trajectory& msg)
 
 // Check if the current path is blocked
 void GlobalPlannerNode::octomapFullCallback(const octomap_msgs::Octomap& msg) {
-  if (num_octomap_msg_++ % 10 > 0) {
-    return;  // We get too many of those messages. Only process 1/10 of them
-  }
   std::lock_guard<std::mutex> lock(mutex_);
 
-  bool current_path_is_ok = global_planner_.updateFullOctomap(msg);
+  ros::Time current = ros::Time::now();
+  // Update map at a fixed rate. This is useful on setting replanning rates for the planner.
+  if ((current - last_wp_time_).toSec() < mapupdate_dt_) {
+    return;
+  }
+  last_wp_time_ = ros::Time::now();
+
+  octomap::AbstractOcTree* tree = octomap_msgs::msgToMap(msg);
+
+  global_planner_.updateFullOctomap(tree);
 }
 
 // Go through obstacle points and store them
@@ -307,7 +315,6 @@ void GlobalPlannerNode::cmdLoopCallback(const ros::TimerEvent& event) {
 
   // Check if all information was received
   ros::Time now = ros::Time::now();
-  last_wp_time_ = ros::Time::now();
 
   ros::Duration since_last_cloud = now - last_wp_time_;
   ros::Duration since_start = now - start_time_;
@@ -390,22 +397,14 @@ void GlobalPlannerNode::publishSetpoint() {
   // Publish setpoint to Mavros
   mavros_waypoint_publisher_.publish(setpoint);
   mavros_msgs::Trajectory obst_free_path = {};
-  avoidance::transformPoseToTrajectory(obst_free_path, setpoint);
+  geometry_msgs::Twist velocity_setpoint{};
+  velocity_setpoint.linear.x = NAN;
+  velocity_setpoint.linear.y = NAN;
+  velocity_setpoint.linear.z = NAN;
+  avoidance::transformToTrajectory(obst_free_path, setpoint, velocity_setpoint);
   mavros_obstacle_free_path_pub_.publish(obst_free_path);
 }
 
 bool GlobalPlannerNode::isCloseToGoal() { return distance(current_goal_, last_pos_) < 1.5; }
 
 }  // namespace global_planner
-
-int main(int argc, char** argv) {
-  ros::init(argc, argv, "global_planner_node");
-
-  ros::NodeHandle nh("~");
-  ros::NodeHandle nh_private("");
-
-  global_planner::GlobalPlannerNode global_planner_node(nh, nh_private);
-
-  ros::spin();
-  return 0;
-}

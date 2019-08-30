@@ -20,6 +20,7 @@ LocalPlannerNode::LocalPlannerNode(const ros::NodeHandle& nh, const ros::NodeHan
     : nh_(nh), nh_private_(nh_private), spin_dt_(0.1), tf_buffer_(5.f) {
   local_planner_.reset(new LocalPlanner());
   wp_generator_.reset(new WaypointGenerator());
+  avoidance_node_.reset(new AvoidanceNode(nh, nh_private));
 
 #ifndef DISABLE_SIMULATION
   world_visualizer_.reset(new WorldVisualizer(nh_));
@@ -46,13 +47,10 @@ LocalPlannerNode::LocalPlannerNode(const ros::NodeHandle& nh, const ros::NodeHan
   fcu_input_sub_ = nh_.subscribe("/mavros/trajectory/desired", 1, &LocalPlannerNode::fcuInputGoalCallback, this);
   goal_topic_sub_ = nh_.subscribe("/input/goal_position", 1, &LocalPlannerNode::updateGoalCallback, this);
   distance_sensor_sub_ = nh_.subscribe("/mavros/altitude", 1, &LocalPlannerNode::distanceSensorCallback, this);
-  px4_param_sub_ = nh_.subscribe("/mavros/param/param_value", 1, &LocalPlannerNode::px4ParamsCallback, this);
   mavros_vel_setpoint_pub_ = nh_.advertise<geometry_msgs::Twist>("/mavros/setpoint_velocity/cmd_vel_unstamped", 10);
   mavros_pos_setpoint_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local", 10);
   mavros_obstacle_free_path_pub_ = nh_.advertise<mavros_msgs::Trajectory>("/mavros/trajectory/generated", 10);
   mavros_obstacle_distance_pub_ = nh_.advertise<sensor_msgs::LaserScan>("/mavros/obstacle/send", 10);
-  mavros_system_status_pub_ = nh_.advertise<mavros_msgs::CompanionProcessStatus>("/mavros/companion_process/status", 1);
-  get_px4_param_client_ = nh_.serviceClient<mavros_msgs::ParamGet>("/mavros/param/get");
 
   // initialize visualization topics
   visualizer_.initializePublishers(nh_);
@@ -60,12 +58,10 @@ LocalPlannerNode::LocalPlannerNode(const ros::NodeHandle& nh, const ros::NodeHan
   // pass initial goal into local planner
   local_planner_->applyGoal();
 
-  local_planner_->disable_rise_to_goal_altitude_ = disable_rise_to_goal_altitude_;
   setSystemStatus(MAV_STATE::MAV_STATE_BOOT);
 
   hover_ = false;
   planner_is_healthy_ = true;
-  callPx4Params_ = true;
   armed_ = false;
   start_time_ = ros::Time::now();
 }
@@ -85,6 +81,8 @@ void LocalPlannerNode::startNode() {
 
   cmdloop_spinner_.reset(new ros::AsyncSpinner(1, &cmdloop_queue_));
   cmdloop_spinner_->start();
+
+  avoidance_node_->init();
 }
 
 void LocalPlannerNode::readParams() {
@@ -93,7 +91,6 @@ void LocalPlannerNode::readParams() {
   nh_.param<double>("goal_x_param", goal.x, 9.0);
   nh_.param<double>("goal_y_param", goal.y, 13.0);
   nh_.param<double>("goal_z_param", goal.z, 3.5);
-  nh_.param<bool>("disable_rise_to_goal_altitude", disable_rise_to_goal_altitude_, false);
   nh_.param<bool>("accept_goal_input_topic", accept_goal_input_topic_, false);
 
   std::vector<std::string> camera_topics;
@@ -101,6 +98,7 @@ void LocalPlannerNode::readParams() {
   initializeCameraSubscribers(camera_topics);
 
   goal_msg_.pose.position = goal;
+  new_goal_ = true;
 }
 
 void LocalPlannerNode::initializeCameraSubscribers(std::vector<std::string>& camera_topics) {
@@ -185,14 +183,6 @@ void LocalPlannerNode::updatePlannerInfo() {
     new_goal_ = false;
   }
 
-  // update ground distance
-  if (ros::Time::now() - ground_distance_msg_.header.stamp < ros::Duration(0.5)) {
-    local_planner_->ground_distance_ = ground_distance_msg_.bottom_clearance;
-  } else {
-    local_planner_->ground_distance_ = 2.0;  // in case where no range data is
-    // available assume vehicle is close to ground
-  }
-
   // update last sent waypoint
   local_planner_->last_sent_waypoint_ = toEigen(newest_waypoint_position_);
 }
@@ -235,7 +225,6 @@ void LocalPlannerNode::cmdLoopCallback(const ros::TimerEvent& event) {
     ros::Duration since_query = ros::Time::now() - start_query_position;
     if (since_query > ros::Duration(local_planner_->timeout_termination_)) {
       setSystemStatus(MAV_STATE::MAV_STATE_FLIGHT_TERMINATION);
-      publishSystemStatus();
       if (!position_not_received_error_sent_) {
         // clang-format off
         ROS_WARN("\033[1;33m Planner abort: missing required data \n \033[0m");
@@ -263,27 +252,30 @@ void LocalPlannerNode::cmdLoopCallback(const ros::TimerEvent& event) {
   // If planner is not running, update planner info and get last results
   updatePlanner();
 
+  // update the Firmware paramters
+  local_planner_->px4_ = avoidance_node_->getPX4Parameters();
+
+  local_planner_->mission_item_speed_ = avoidance_node_->getMissionItemSpeed();
+
   // send waypoint
-  if (companion_state_ == MAV_STATE::MAV_STATE_ACTIVE) calculateWaypoints(hover_);
+  if (avoidance_node_->getSystemStatus() == MAV_STATE::MAV_STATE_ACTIVE) calculateWaypoints(hover_);
 
   position_received_ = false;
-
-  // publish system status
-  if (now - t_status_sent_ > ros::Duration(0.2)) publishSystemStatus();
 
   return;
 }
 
-void LocalPlannerNode::setSystemStatus(MAV_STATE state) { companion_state_ = state; }
+void LocalPlannerNode::setSystemStatus(MAV_STATE state) { avoidance_node_->setSystemStatus(state); }
 
-MAV_STATE LocalPlannerNode::getSystemStatus() { return companion_state_; }
+MAV_STATE LocalPlannerNode::getSystemStatus() { return avoidance_node_->getSystemStatus(); }
 
 void LocalPlannerNode::calculateWaypoints(bool hover) {
   bool is_airborne = armed_ && (nav_state_ != NavigationState::none);
 
   wp_generator_->updateState(toEigen(newest_pose_.pose.position), toEigen(newest_pose_.pose.orientation),
                              toEigen(goal_msg_.pose.position), toEigen(prev_goal_.pose.position),
-                             toEigen(vel_msg_.twist.linear), hover, is_airborne);
+                             toEigen(vel_msg_.twist.linear), hover, is_airborne, nav_state_, is_land_waypoint_,
+                             is_takeoff_waypoint_, toEigen(desired_vel_msg_.twist.linear));
   waypointResult result = wp_generator_->getWaypoints();
 
   Eigen::Vector3f closest_pt = Eigen::Vector3f(NAN, NAN, NAN);
@@ -307,25 +299,11 @@ void LocalPlannerNode::calculateWaypoints(bool hover) {
 
   // send waypoints to mavros
   mavros_msgs::Trajectory obst_free_path = {};
-  if (local_planner_->use_vel_setpoints_) {
-    mavros_vel_setpoint_pub_.publish(toTwist(result.linear_velocity_wp, result.angular_velocity_wp));
-    transformVelocityToTrajectory(obst_free_path, toTwist(result.linear_velocity_wp, result.angular_velocity_wp));
-  } else {
-    mavros_pos_setpoint_pub_.publish(toPoseStamped(result.position_wp, result.orientation_wp));
-    transformPoseToTrajectory(obst_free_path, toPoseStamped(result.position_wp, result.orientation_wp));
-  }
+  transformToTrajectory(obst_free_path, toPoseStamped(result.position_wp, result.orientation_wp),
+                        toTwist(result.linear_velocity_wp, result.angular_velocity_wp));
+  mavros_pos_setpoint_pub_.publish(toPoseStamped(result.position_wp, result.orientation_wp));
+
   mavros_obstacle_free_path_pub_.publish(obst_free_path);
-}
-
-void LocalPlannerNode::publishSystemStatus() {
-  mavros_msgs::CompanionProcessStatus msg;
-
-  msg.header.stamp = ros::Time::now();
-  msg.component = 196;  // MAV_COMPONENT_ID_AVOIDANCE
-  msg.state = (int)companion_state_;
-
-  mavros_system_status_pub_.publish(msg);
-  t_status_sent_ = ros::Time::now();
 }
 
 void LocalPlannerNode::clickedPointCallback(const geometry_msgs::PointStamped& msg) {
@@ -348,79 +326,34 @@ void LocalPlannerNode::updateGoalCallback(const visualization_msgs::MarkerArray&
 }
 
 void LocalPlannerNode::fcuInputGoalCallback(const mavros_msgs::Trajectory& msg) {
-  if ((msg.point_valid[1] == true) &&
-      (toEigen(goal_msg_.pose.position) - toEigen(msg.point_2.position)).norm() > 0.01f) {
+  bool update =
+      ((avoidance::toEigen(msg.point_2.position) - avoidance::toEigen(goal_mission_item_msg_.pose.position)).norm() >
+       0.01) ||
+      !std::isfinite(goal_msg_.pose.position.x) || !std::isfinite(goal_msg_.pose.position.y);
+  if ((msg.point_valid[0] == true) && update) {
     new_goal_ = true;
     prev_goal_ = goal_msg_;
-    goal_msg_.pose.position = msg.point_2.position;
+    goal_msg_.pose.position = msg.point_1.position;
+    desired_vel_msg_.twist.linear = msg.point_1.velocity;
+    is_land_waypoint_ = (msg.command[0] == static_cast<int>(MavCommand::MAV_CMD_NAV_LAND));
+    is_takeoff_waypoint_ = (msg.command[0] == static_cast<int>(MavCommand::MAV_CMD_NAV_TAKEOFF));
+  }
+  if (msg.point_valid[1] == true) {
+    goal_mission_item_msg_.pose.position = msg.point_2.position;
+    if (msg.command[1] == UINT16_MAX) {
+      goal_msg_.pose.position = msg.point_2.position;
+      desired_vel_msg_.twist.linear.x = NAN;
+      desired_vel_msg_.twist.linear.y = NAN;
+      desired_vel_msg_.twist.linear.z = NAN;
+    }
+    desired_yaw_setpoint_ = msg.point_2.yaw;
+    desired_yaw_speed_setpoint_ = msg.point_2.yaw_rate;
   }
 }
 
 void LocalPlannerNode::distanceSensorCallback(const mavros_msgs::Altitude& msg) {
   if (!std::isnan(msg.bottom_clearance)) {
     ground_distance_msg_ = msg;
-    visualizer_.publishGround(local_planner_->getPosition(), local_planner_->histogram_box_.radius_,
-                              local_planner_->ground_distance_);
-  }
-}
-
-void LocalPlannerNode::px4ParamsCallback(const mavros_msgs::Param& msg) {
-  // collect all px4 parameters needed for model based trajectory planning
-  // when adding new parameter to the struct ModelParameters,
-  // add new else if case with correct value type
-  auto parse_param_f = [&msg](const std::string& name, float& val) -> bool {
-    if (msg.param_id == name) {
-      ROS_INFO("parameter %s is set from  %f to %f \n", name.c_str(), val, msg.value.real);
-      val = msg.value.real;
-      return true;
-    }
-    return false;
-  };
-
-  auto parse_param_i = [&msg](const std::string& name, int& val) -> bool {
-    if (msg.param_id == name) {
-      ROS_INFO("parameter %s is set from %i to %li \n", name.c_str(), val, msg.value.integer);
-      val = msg.value.integer;
-      return true;
-    }
-    return false;
-  };
-
-  // clang-format off
-  parse_param_f("MPC_ACC_DOWN_MAX", local_planner_->px4_.param_mpc_acc_down_max) ||
-  parse_param_f("MPC_ACC_HOR", local_planner_->px4_.param_mpc_acc_hor) ||
-  parse_param_f("MPC_ACC_UP_MAX", local_planner_->px4_.param_acc_up_max) ||
-  parse_param_i("MPC_AUTO_MODE", local_planner_->px4_.param_mpc_auto_mode) ||
-  parse_param_f("MPC_JERK_MIN", local_planner_->px4_.param_mpc_jerk_min) ||
-  parse_param_f("MPC_JERK_MAX", local_planner_->px4_.param_mpc_jerk_max) ||
-  parse_param_f("MPC_LAND_SPEED", local_planner_->px4_.param_mpc_land_speed) ||
-  parse_param_f("MPC_TKO_SPEED", local_planner_->px4_.param_mpc_tko_speed) ||
-  parse_param_f("MPC_XY_CRUISE", local_planner_->px4_.param_mpc_xy_cruise) ||
-  parse_param_f("MPC_Z_VEL_MAX_DN", local_planner_->px4_.param_mpc_vel_max_dn) ||
-  parse_param_f("MPC_Z_VEL_MAX_UP", local_planner_->px4_.param_mpc_z_vel_max_up) ||
-  parse_param_f("MPC_COL_PREV_D", local_planner_->px4_.param_mpc_col_prev_d);
-  // clang-format on
-}
-
-void LocalPlannerNode::checkPx4Parameters() {
-  auto& client = get_px4_param_client_;
-  auto request_param = [&client](const std::string& name, float& val) {
-    mavros_msgs::ParamGet req;
-    req.request.param_id = name;
-    if (client.call(req) && req.response.success) {
-      val = req.response.value.real;
-    }
-  };
-  while (!should_exit_) {
-    request_param("MPC_XY_CRUISE", local_planner_->px4_.param_mpc_xy_cruise);
-    request_param("MPC_COL_PREV_D", local_planner_->px4_.param_mpc_col_prev_d);
-
-    if (!std::isfinite(local_planner_->px4_.param_mpc_xy_cruise) ||
-        !std::isfinite(local_planner_->px4_.param_mpc_col_prev_d)) {
-      std::this_thread::sleep_for(std::chrono::seconds(5));
-    } else {
-      std::this_thread::sleep_for(std::chrono::seconds(30));
-    }
   }
 }
 
@@ -526,38 +459,7 @@ void LocalPlannerNode::threadFunction() {
 }
 
 void LocalPlannerNode::checkFailsafe(ros::Duration since_last_cloud, ros::Duration since_start, bool& hover) {
-  ros::Duration timeout_termination = ros::Duration(local_planner_->timeout_termination_);
-  ros::Duration timeout_critical = ros::Duration(local_planner_->timeout_critical_);
-  ros::Duration timeout_startup = ros::Duration(local_planner_->timeout_startup_);
-
-  if (since_last_cloud > timeout_termination && since_start > timeout_termination) {
-    setSystemStatus(MAV_STATE::MAV_STATE_FLIGHT_TERMINATION);
-    ROS_WARN("\033[1;33m Planner abort: missing required data \n \033[0m");
-  } else {
-    if (since_last_cloud > timeout_critical && since_start > timeout_startup) {
-      if (position_received_) {
-        hover = true;
-        setSystemStatus(MAV_STATE::MAV_STATE_CRITICAL);
-        std::string not_received = "";
-        for (size_t i = 0; i < cameras_.size(); i++) {
-          if (!cameras_[i].received_) {
-            not_received.append(", no cloud received on topic ");
-            not_received.append(cameras_[i].topic_);
-          }
-          if (!cameras_[i].transformed_) {
-            not_received.append(", missing tf on topic ");
-            not_received.append(cameras_[i].topic_);
-          }
-        }
-
-        ROS_WARN("\033[1;33m Pointcloud timeout %s (Hovering at current position) \n \033[0m", not_received.c_str());
-      } else {
-        ROS_WARN("\033[1;33m Pointcloud timeout: No position received, no WP to output.... \n \033[0m");
-      }
-    } else {
-      if (!hover) setSystemStatus(MAV_STATE::MAV_STATE_ACTIVE);
-    }
-  }
+  avoidance_node_->checkFailsafe(since_last_cloud, since_start, hover);
 }
 
 void LocalPlannerNode::pointCloudTransformThread(int index) {

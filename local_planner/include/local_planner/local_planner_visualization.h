@@ -49,23 +49,6 @@ class LocalPlannerVisualization {
   void publishGoal(const geometry_msgs::Point& goal) const;
 
   /**
-  * @brief       Visualization of the bounding box used to crop the pointcloud
-  * @params[in]  drone_pos, current position of the drone
-  * @params[in]  box_radius, the radius of the bounding box
-  * @params[in]  plane_height, the height above ground at which the pointcloud
-  *              is additionally cropped
-  **/
-  void publishBox(const Eigen::Vector3f& drone_pos, float box_radius, float plane_height) const;
-
-  /**
-  * @brief       Visualization of the data used during takeoff
-  * @params[in]  take_off_pose, pose at which the vehicle was armed
-  * @params[in]  starting_height, height at which the planner starts planning
-  *forward
-  **/
-  void publishReachHeight(const Eigen::Vector3f& take_off_pose, float starting_height) const;
-
-  /**
   * @brief       Visualization of the 2D compression of the local pointcloud
   * @params[in]  histogram_image, data for visualization
   * @params[in]  cost_image, data for visualization
@@ -119,14 +102,6 @@ class LocalPlannerVisualization {
                               const geometry_msgs::Point& newest_pos) const;
 
   /**
-  * @brief       Visualization of the ground
-  * @params[in]  drone_pos, location of the drone at the current timestep
-  * @params[in]  box_radius, the radius of the bounding box
-  * @params[in]  ground_distance, measured distance to ground
-  **/
-  void publishGround(const Eigen::Vector3f& drone_pos, float box_radius, float ground_distance) const;
-
-  /**
   * @brief       Visualization of the offtrack state
   * @params[in]  closest_pt, vehicle position projection on the line previous to
   * current goal
@@ -136,6 +111,8 @@ class LocalPlannerVisualization {
   void publishOfftrackPoints(Eigen::Vector3f& closest_pt, Eigen::Vector3f& deg60_pt);
 
   void publishFOV(const std::vector<FOV>& fov, float max_range) const;
+
+  void publishRangeScan(const sensor_msgs::LaserScan& scan, const geometry_msgs::PoseStamped& newest_pose) const;
 
  private:
   ros::Publisher local_pointcloud_pub_;
@@ -152,13 +129,12 @@ class LocalPlannerVisualization {
   ros::Publisher path_waypoint_pub_;
   ros::Publisher path_adapted_waypoint_pub_;
   ros::Publisher current_waypoint_pub_;
-  ros::Publisher takeoff_pose_pub_;
-  ros::Publisher initial_height_pub_;
   ros::Publisher histogram_image_pub_;
   ros::Publisher cost_image_pub_;
   ros::Publisher closest_point_pub_;
   ros::Publisher deg60_point_pub_;
   ros::Publisher fov_pub_;
+  ros::Publisher range_scan_pub_;
 
   int path_length_ = 0;
 };

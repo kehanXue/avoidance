@@ -23,7 +23,7 @@ The documentation contains information about how to setup and run the two planne
 # Table of Contents
 - [Getting Started](#getting-started)
   - [Installation](#installation)
-    - [Installation for Ubuntu 16.04 and ROS Kinetic](#installation-for-ubuntu-16.04-and-ros-kinetic)
+    - [Installation for Ubuntu](#installation)
   - [Run the Avoidance Gazebo Simulation](#run-the-avoidance-gazebosimulation)
     - [Local Planner](#local-planner)
     - [Global Planner](#global-planner)
@@ -43,9 +43,9 @@ The documentation contains information about how to setup and run the two planne
 
 ## Installation
 
-### Installation for Ubuntu 16.04 and ROS Kinetic
+### Installation
 
-This is a step-by-step guide to install and build all the prerequisites for running this module on Ubuntu 16.04. You might want to skip some of them if your system is already partially installed.
+This is a step-by-step guide to install and build all the prerequisites for running this module on Ubuntu 16.04 and Kinetic - Ubuntu 18.04 and Melodic are supported as well. You might want to skip some of them if your system is already partially installed.
 
 Note that in the following instructions, we assume your catkin workspace (in which we will build the avoidance module) is in `~/catkin_ws`, and the PX4 Firmware directory is `~/Firmware`. Feel free to adapt this to your situation.
 
@@ -57,7 +57,7 @@ Note that in the following instructions, we assume your catkin workspace (in whi
    sudo apt update
    ```
 
-1. Install gazebo with ROS.
+1. Install gazebo with ROS (use ROS melodic based on preference).
 
    ```bash
    sudo apt install ros-kinetic-desktop-full
@@ -166,7 +166,7 @@ In the following section we guide you trough installing and running a Gazebo sim
    # Build and run simulation
    make px4_sitl_default gazebo
 
-   # Setup some more Gazebo-related environment variables
+   # Setup some more Gazebo-related environment variables (You may need to modify this line based on the location of the Firmware folder on your machine)
    . ~/Firmware/Tools/setup_gazebo.bash ~/Firmware ~/Firmware/build/px4_sitl_default
    ```
 
@@ -180,40 +180,10 @@ In the following section we guide you trough installing and running a Gazebo sim
 echo export GAZEBO_MODEL_PATH=${GAZEBO_MODEL_PATH}:~/catkin_ws/src/avoidance/avoidance/sim/models:~/catkin_ws/src/avoidance/avoidance/sim/worlds >> ~/.bashrc
 ```
 
+Steps 3, 4 and 5 together with sourcing your catkin setup.bash (`source ~/catkin_ws/devel/setup.bash`) should be repeated each time a new terminal window is open.
 You should now be ready to run the simulation using local or global planner.
 
-### Global Planner
-
-This section shows how to start the *global_planner* and use it for avoidance in offboard mode.
-
-```bash
-roslaunch global_planner global_planner_stereo.launch
-```
-
-You should now see the drone unarmed on the ground in a forest environment as pictured below.
-
-![Screenshot showing gazebo and rviz](docs/simulation_screenshot.png)
-
-To start flying, put the drone in OFFBOARD mode and arm it. The avoidance node will then take control of it.
-
-```bash
-# In another terminal
-rosrun mavros mavsys mode -c OFFBOARD
-rosrun mavros mavsafety arm
-```
-
-Initially the drone should just hover at 3.5m altitude.
-
-From the command line, you can also make Gazebo follow the drone, if you want.
-
-```bash
-gz camera --camera-name=gzclient_camera --follow=iris
-```
-
-One can plan a new path by setting a new goal with the *2D Nav Goal* button in rviz. The planned path should show up in rviz and the drone should follow the path, updating it when obstacles are detected. It is also possible to set a goal without using the obstacle avoidance (i.e. the drone will go straight to this goal and potentially collide with obstacles). To do so, set the position with the *2D Pose Estimate* button in rviz.
-
-
-### Local Planner
+### Local Planner (default, heavily flight tested)
 
 This section shows how to start the *local_planner* and use it for avoidance in mission or offboard mode.
 
@@ -283,6 +253,38 @@ Then the drone will start moving towards the goal. The default x, y goal positio
 ![Screenshot rviz goal selection](docs/lp_goal_rviz.png)
 
 For MISSIONS, open [QGroundControl](http://qgroundcontrol.com/) and plan a mission as described [here](https://docs.px4.io/en/flight_modes/mission.html). Set the parameter `COM_OBS_AVOID` true. Start the mission and the vehicle will fly the mission waypoints dynamically recomputing the path such that it is collision free.
+
+
+### Global Planner (advanced, not flight tested)
+
+This section shows how to start the *global_planner* and use it for avoidance in offboard mode.
+
+```bash
+roslaunch global_planner global_planner_stereo.launch
+```
+
+You should now see the drone unarmed on the ground in a forest environment as pictured below.
+
+![Screenshot showing gazebo and rviz](docs/simulation_screenshot.png)
+
+To start flying, put the drone in OFFBOARD mode and arm it. The avoidance node will then take control of it.
+
+```bash
+# In another terminal
+rosrun mavros mavsys mode -c OFFBOARD
+rosrun mavros mavsafety arm
+```
+
+Initially the drone should just hover at 3.5m altitude.
+
+From the command line, you can also make Gazebo follow the drone, if you want.
+
+```bash
+gz camera --camera-name=gzclient_camera --follow=iris
+```
+
+One can plan a new path by setting a new goal with the *2D Nav Goal* button in rviz. The planned path should show up in rviz and the drone should follow the path, updating it when obstacles are detected. It is also possible to set a goal without using the obstacle avoidance (i.e. the drone will go straight to this goal and potentially collide with obstacles). To do so, set the position with the *2D Pose Estimate* button in rviz.
+
 
 ### Safe Landing Planner
 
@@ -467,16 +469,19 @@ home_position | ALTITUDE | altitude | mavros_msgs::Altitude | mavros/altitude
 vehicle_air_data | ALTITUDE | altitude | mavros_msgs::Altitude | mavros/altitude
 vehicle_status | HEARTBEAT | sys_status | mavros_msgs::State | mavros/state
 vehicle_trajectory_waypoint_desired | TRAJECTORY_REPRESENTATION_WAYPOINT | trajectory  | mavros_msgs::Trajectory | mavros/trajectory/desired
+- | MAVLINK_MSG_ID_PARAM_REQUEST_LIST | param | mavros_msgs::Param | /mavros/param/param_value
+- | MISSION_ITEM | waypoint | mavros_msgs::WaypointList | /mavros/mission/waypoints
+
 
 This is the complete message flow *to* PX4 Firmware from the local planner.
 
 ROS topic | ROS Msgs. | MAVROS Plugin | MAVLink | PX4 Topic
 --- | --- | --- | --- | ---
 /mavros/setpoint_position/local (offboard) | geometry_msgs::PoseStamped | setpoint_position | SET_POSITION_LOCAL_POSITION_NED | position_setpoint_triplet
-/mavros/setpoint_velocity/cmd_vel_unstamped (offboard) | geometry_msgs::TwistStamped | setpoint_velocity | SET_POSITION_LOCAL_POSITION_NED | position_setpoint_triplet
 /mavros/trajectory/generated (mission) | mavros_msgs::Trajectory | trajectory | TRAJECTORY_REPRESENTATION_WAYPOINT | vehicle_trajectory_waypoint
 /mavros/obstacle/send | sensor_msgs::LaserScan | obstacle_distance | OBSTACLE_DISTANCE | obstacle_distance
-/mavros/set_mode | mavros_msgs::SetMode | sys_status | SET_MODE | vehicle_command
+/mavros/companion_process/status | mavros_msgs::CompanionProcessStatus | companion_process_status | HEARTBEAT | telemetry_status
+
 
 ### PX4 and global planner
 
@@ -486,12 +491,32 @@ PX4 topic | MAVLink | MAVROS Plugin | ROS Msgs. | Topic
 --- | --- | --- | --- | ---
 vehicle_local_position | LOCAL_POSITION_NED | local_position | geometry_msgs::PoseStamped | mavros/local_position/pose
 vehicle_local_position | LOCAL_POSITION_NED | local_position | geometry_msgs::TwistStamped | mavros/local_position/velocity
+vehicle_trajectory_waypoint_desired | TRAJECTORY_REPRESENTATION_WAYPOINT | trajectory  | mavros_msgs::Trajectory | mavros/trajectory/desired
 
 This is the complete message flow *to* PX4 Firmware *from* the global planner.
 
 ROS topic | ROS Msgs. | MAVROS Plugin | MAVLink | PX4 Topic
 --- | --- | --- | --- | ---
 /mavros/setpoint_position/local (offboard) | geometry_msgs::PoseStamped | setpoint_position | SET_POSITION_LOCAL_POSITION_NED | position_setpoint_triplet
+/mavros/trajectory/generated (mission) | mavros_msgs::Trajectory | trajectory | TRAJECTORY_REPRESENTATION_WAYPOINT | vehicle_trajectory_waypoint
+
+### PX4 and safe landing planner
+
+This is the complete message flow *from* PX4 Firmware to the safe landing planner.
+
+PX4 topic | MAVLink | MAVROS Plugin | ROS Msgs. | ROS Topic
+--- | --- | --- | --- | ---
+vehicle_local_position | LOCAL_POSITION_NED | local_position | geometry_msgs::PoseStamped | mavros/local_position/pose
+vehicle_status | HEARTBEAT | sys_status | mavros_msgs::State | mavros/state
+vehicle_trajectory_waypoint_desired | TRAJECTORY_REPRESENTATION_WAYPOINT | trajectory  | mavros_msgs::Trajectory | mavros/trajectory/desired
+- | MAVLINK_MSG_ID_PARAM_REQUEST_LIST | param | mavros_msgs::Param | /mavros/param/param_value
+
+This is the complete message flow *to* PX4 Firmware from the safe landing planner.
+
+ROS topic | ROS Msgs. | MAVROS Plugin | MAVLink | PX4 Topic
+--- | --- | --- | --- | ---
+/mavros/trajectory/generated (mission) | mavros_msgs::Trajectory | trajectory | TRAJECTORY_REPRESENTATION_WAYPOINT | vehicle_trajectory_waypoint
+/mavros/companion_process/status | mavros_msgs::CompanionProcessStatus | companion_process_status | HEARTBEAT | telemetry_status
 
 # Contributing
 

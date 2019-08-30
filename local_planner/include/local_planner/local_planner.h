@@ -4,7 +4,6 @@
 #include <sensor_msgs/image_encodings.h>
 #include "avoidance/histogram.h"
 #include "avoidance_output.h"
-#include "box.h"
 #include "candidate_direction.h"
 #include "cost_parameters.h"
 #include "planner_functions.h"
@@ -33,46 +32,14 @@ namespace avoidance {
 class StarPlanner;
 class TreeNode;
 
-/**
-* @brief struct to contain the parameters needed for the model based trajectory
-*planning
-* when MPC_AUTO_MODE is set to 1 (default) then all members are used for the
-*jerk limited
-* trajectory on the flight controller side
-* when MPC_AUTO_MODE is set to 0, only up_accl, down_accl, xy_acc are used on
-*the
-* flight controller side
-**/
-struct ModelParameters {
-  // clang-format off
-  int param_mpc_auto_mode = -1; // Auto sub-mode - 0: default line tracking, 1 jerk-limited trajectory
-  float param_mpc_jerk_min = NAN; // Velocity-based minimum jerk limit
-  float param_mpc_jerk_max = NAN; // Velocity-based maximum jerk limit
-  float param_acc_up_max = NAN;   // Maximum vertical acceleration in velocity controlled modes upward
-  float param_mpc_z_vel_max_up = NAN;   // Maximum vertical ascent velocity
-  float param_mpc_acc_down_max = NAN; // Maximum vertical acceleration in velocity controlled modes down
-  float param_mpc_vel_max_dn = NAN; // Maximum vertical descent velocity
-  float param_mpc_acc_hor = NAN;  // Maximum horizontal acceleration for auto mode and
-                      // maximum deceleration for manual mode
-  float param_mpc_xy_cruise = NAN;   // Desired horizontal velocity in mission
-  float param_mpc_tko_speed = NAN; // Takeoff climb rate
-  float param_mpc_land_speed = NAN;   // Landing descend rate
-
-  // TODO: add estimator limitations for max speed and height
-
-  float param_mpc_col_prev_d = NAN; // Collision Prevention distance to keep from obstacle. -1 for disabled
-  // clang-format on
-};
-
 class LocalPlanner {
  private:
-  bool reach_altitude_ = false;
-
   int children_per_node_;
   int n_expanded_nodes_;
   int min_num_points_per_cell_ = 3;
 
-  float min_realsense_dist_ = 0.2f;
+  float min_sensor_range_ = 0.2f;
+  float max_sensor_range_ = 12.0f;
   float smoothing_margin_degrees_ = 30.f;
   float max_point_age_s_ = 10;
   float yaw_fcu_frame_deg_ = 0.0f;
@@ -120,22 +87,18 @@ class LocalPlanner {
   void generateHistogramImage(Histogram& histogram);
 
  public:
-  Box histogram_box_;
   std::vector<uint8_t> histogram_image_data_;
   std::vector<uint8_t> cost_image_data_;
-  bool use_vel_setpoints_;
   bool currently_armed_ = false;
-  bool disable_rise_to_goal_altitude_ = false;
 
   double timeout_startup_;
   double timeout_critical_;
   double timeout_termination_;
-  double starting_height_ = 0.0;
-  float ground_distance_ = 2.0;
+  float speed_ = 1.0f;
+  float mission_item_speed_ = NAN;
 
   ModelParameters px4_;  // PX4 Firmware paramters
 
-  Eigen::Vector3f take_off_pose_ = Eigen::Vector3f::Zero();
   sensor_msgs::LaserScan distance_data_ = {};
   Eigen::Vector3f last_sent_waypoint_ = Eigen::Vector3f::Zero();
 
@@ -172,6 +135,7 @@ class LocalPlanner {
   float getHFOV(int i) { return i < fov_fcu_frame_.size() ? fov_fcu_frame_[i].h_fov_deg : 0.f; }
   float getVFOV(int i) { return i < fov_fcu_frame_.size() ? fov_fcu_frame_[i].v_fov_deg : 0.f; }
   const std::vector<FOV>& getFOV() const { return fov_fcu_frame_; }
+  float getSensorRange() const { return max_sensor_range_; }
 
   /**
   * @brief     getter method for current goal
@@ -188,9 +152,16 @@ class LocalPlanner {
   * @param     level, bitmask to group together reconfigurable parameters
   **/
   void dynamicReconfigureSetParams(avoidance::LocalPlannerNodeConfig& config, uint32_t level);
+
   /**
-  * @brief     getter method for current vehicle position and orientation
-  * @returns   vehicle position and orientation
+  * @brief     getter method for current vehicle orientation
+  * @returns   vehicle orientation in the fcu convention of the world frame
+  **/
+  float getOrientation() const { return yaw_fcu_frame_deg_; }
+
+  /**
+  * @brief     getter method for current vehicle position
+  * @returns   vehicle position
   **/
   Eigen::Vector3f getPosition() const;
 
