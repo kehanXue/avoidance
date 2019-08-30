@@ -8,7 +8,7 @@
 
 
 <launch>
-    <arg name="pointcloud_topics" default="[/kehanUAV/zed/camera/depth/points2]"/>
+    <arg name="pointcloud_topics" default="[/zed/camera/depth/points2]"/>
 
     <node pkg="tf" type="static_transform_publisher" name="tf_zed_camera"
           args="0 0 0 0 0 0 fcu base_link 10"/>
@@ -19,16 +19,16 @@
     <!-- Launch local planner -->
     <node name="local_planner_node" pkg="local_planner" type="local_planner_node" output="screen" >
         <param name="goal_x_param" value="1" />
-        <param name="goal_y_param" value="1"/>
-        <param name="goal_z_param" value="3" />
+        <param name="goal_y_param" value="0"/>
+        <param name="goal_z_param" value="2" />
         <rosparam param="pointcloud_topics" subst_value="True">$(arg pointcloud_topics)</rosparam>
     </node>
 
     <!-- Launch pointcloud generation from Realsense images -->  
-    <arg name="camera_info" value="/kehanUAV/zed/zed_node/rgb_raw/camera_info"/>
-    <arg name="depReg_imgraw" value="/kehanUAV/zed/zed_node/depth/depth_registered"/>  <!--Raw depth image-->
-    <arg name="depReg_imgrect" value="/kehanUAV/zed/zed_node/depth/depth_registered"/>  <!--Raw depth image-->
-    <arg name="out_cloud" value="/kehanUAV/zed/camera/depth/points2"/>
+    <arg name="camera_info" value="/zed/zed_node/rgb_raw/camera_info"/>
+    <arg name="depReg_imgraw" value="/zed/zed_node/depth/depth_registered"/>  <!--Raw depth image-->
+    <arg name="depReg_imgrect" value="/zed/zed_node/depth/depth_registered"/>  <!--Raw depth image-->
+    <arg name="out_cloud" value="/zed/camera/depth/points2"/>
    
     <node pkg="nodelet" type="nodelet" name="standalone_nodelet" args="manager" output="screen"/>
 
@@ -39,7 +39,5 @@
       <remap from="image_rect" to="$(arg depReg_imgrect)"/>
       <remap from="points" to="$(arg out_cloud)"/>
     </node>
-   
-    <node name="rviz" pkg="rviz" type="rviz" output="screen" args="-d $(find local_planner)/resource/local_planner.rviz" />
 
 </launch>

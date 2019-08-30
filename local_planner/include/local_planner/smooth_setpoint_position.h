@@ -27,6 +27,6 @@ tf::Vector3 toTfVector3(const P& point)
 
 int8_t smooth_setpoint_position(geometry_msgs::PoseStamped &_goal_pose, const geometry_msgs::PoseStamped& _cur_pose);
 
-
+double_t convertYaw2BetweenFabsPI(double_t _yaw);
 
 #endif //LOCAL_PLANNER_SMOOTH_SETPOINT_POSITION_H_
